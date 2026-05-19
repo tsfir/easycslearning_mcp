@@ -1,0 +1,147 @@
+# EasyCS Learning — MCP Server
+
+Gives Claude read access to your EasyCS Learning Firebase data so you can ask questions like:
+
+> *"Get 'Yod 4' class grades in lesson 'Variables' in course 'C# for Beginners' and send a WhatsApp message to all students who failed."*
+
+---
+
+## Available Tools (17 total)
+
+| Group | Tool | What it does |
+|-------|------|-------------|
+| Discovery | `list_courses` | All active courses |
+| Discovery | `list_topics` | Topics in a course |
+| Discovery | `list_lessons` | Lessons in a course / topic |
+| Discovery | `list_classes` | Classes for a course |
+| Roster | `get_class_roster` | Students in a class with streak & points |
+| Roster | `get_student_info` | Full profile for one student |
+| Grades | `get_lesson_grades` | All grades for a lesson |
+| Grades | `get_failing_students` | Students below a score threshold |
+| Grades | `get_student_grades` | All lesson grades for one student |
+| Grades | `get_grade_matrix` | Full student × lesson grid |
+| Progress | `get_course_progress` | Completion % per student |
+| Progress | `get_at_risk_students` | Medium / high risk students |
+| Progress | `get_student_summary` | Complete snapshot for one student |
+| Activity | `get_inactive_students` | Not active in N days |
+| Activity | `get_daily_activity` | Daily active students & answers chart |
+| Activity | `get_lesson_attendance` | Who submitted vs who didn't |
+| Integrity | `get_integrity_flags` | Plagiarism / suspicion flags |
+
+---
+
+## One-Time Setup
+
+### Step 1 — Create an OAuth2 Client ID
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com) → select project **easycslearning-web-app**
+2. Navigate to **APIs & Services → Credentials**
+3. Click **Create Credentials → OAuth 2.0 Client ID**
+4. Application type: **Desktop app**
+5. Name: `EasyCS MCP` (or anything)
+6. Click **Create** → **Download JSON**
+7. Create the directory and save the file:
+
+```
+mkdir %USERPROFILE%\.easycs-mcp
+```
+
+Save the downloaded JSON as:
+```
+C:\Users\<your-username>\.easycs-mcp\client_secret.json
+```
+
+### Step 2 — Enable the Firestore API (if not already enabled)
+
+Go to [APIs & Services → Library](https://console.cloud.google.com/apis/library) and enable:
+- **Cloud Firestore API**
+
+### Step 3 — Build the server
+
+```bash
+cd easycslearning_mcp
+npm install
+npm run build
+```
+
+### Step 4 — First login
+
+Run the server once manually to complete the browser login:
+
+```bash
+node dist/index.js
+```
+
+Your browser will open → sign in with the Google account that owns the Firebase project → the token is saved to `~/.easycs-mcp/credentials.json`.
+
+After this, every subsequent start is silent (no browser needed).
+
+---
+
+## Claude Desktop Configuration
+
+Add this to your Claude Desktop config file:
+
+**Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "easycslearning": {
+      "command": "node",
+      "args": [
+        "C:\\Users\\ronto\\source\\repos\\teaching\\easycslearning_mcp\\dist\\index.js"
+      ]
+    }
+  }
+}
+```
+
+Restart Claude Desktop. You should see "easycslearning" in the tools list.
+
+---
+
+## Claude Code Configuration
+
+Add to your `.claude/settings.local.json` (already exists at the repo root):
+
+```json
+{
+  "mcpServers": {
+    "easycslearning": {
+      "command": "node",
+      "args": [
+        "C:\\Users\\ronto\\source\\repos\\teaching\\easycslearning_mcp\\dist\\index.js"
+      ]
+    }
+  }
+}
+```
+
+---
+
+## Example Prompts
+
+```
+List all my active courses.
+
+Show me the Yod 4 class roster for "C# for Beginners".
+
+Get grades for lesson "Variables" in "C# for Beginners" for class "Yod 4", then list students who scored below 60%.
+
+Who are the at-risk students in "Python Fundamentals"?
+
+Show me students who haven't been active in the last 10 days in "C# for Beginners".
+
+Get integrity flags with high severity for "C# for Beginners".
+
+Give me a full summary for student "David Cohen" in "C# for Beginners".
+```
+
+---
+
+## Security Notes
+
+- The `client_secret.json` and `credentials.json` files live in `~/.easycs-mcp/` on your local machine only — they are never committed to git.
+- The OAuth2 token is scoped to **read-only Firestore access** — it cannot write or delete any data.
+- This server is designed for **local use only** (stdio transport). It is not a public HTTP server.
