@@ -24,6 +24,7 @@ import { registerProgressTools } from './tools/progress.js';
 import { registerActivityTools } from './tools/activity.js';
 import { registerIntegrityTools } from './tools/integrity.js';
 import { registerContentTools } from './tools/content.js';
+import { registerGradingTools } from './tools/grading.js';
 
 async function main(): Promise<void> {
     // ── Authentication ────────────────────────────────────────────────────────
@@ -78,8 +79,9 @@ async function main(): Promise<void> {
     registerActivityTools(server);
     registerIntegrityTools(server);
     registerContentTools(server);
+    registerGradingTools(server);
 
-    process.stderr.write('[EasyCS MCP] 20 tools registered. Listening on stdio.\n');
+    process.stderr.write('[EasyCS MCP] 21 tools registered. Listening on stdio.\n');
 
     // ── Transport ─────────────────────────────────────────────────────────────
     const transport = new StdioServerTransport();

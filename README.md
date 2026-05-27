@@ -6,7 +6,7 @@ Gives Claude read access to your EasyCS Learning Firebase data so you can ask qu
 
 ---
 
-## Available Tools (20 total)
+## Available Tools (21 total)
 
 | Group | Tool | What it does |
 |-------|------|-------------|
@@ -30,6 +30,7 @@ Gives Claude read access to your EasyCS Learning Firebase data so you can ask qu
 | Content | `create_lesson` | Create a new lesson inside a topic |
 | Content | `get_lesson_content` | Read all sections of a lesson in order |
 | Content | `add_lesson_section` | Append a new section to an existing lesson |
+| Grading | `grade_student_answer` | Grade a transcribed handwritten answer with AI and save to Firestore |
 
 ---
 
@@ -81,6 +82,12 @@ After this, every subsequent start is silent (no browser needed).
 
 ---
 
+### Step 5 — Add your Gemini API key (required for `grade_student_answer`)
+
+The grading tool calls the Gemini API directly from the MCP server. Add your key to the MCP server config under `"env"` (see Claude Desktop / Claude Code configuration sections below).
+
+---
+
 ## Claude Desktop Configuration
 
 Add this to your Claude Desktop config file:
@@ -94,7 +101,10 @@ Add this to your Claude Desktop config file:
       "command": "node",
       "args": [
         "C:\\Users\\ronto\\source\\repos\\teaching\\easycslearning_mcp\\dist\\index.js"
-      ]
+      ],
+      "env": {
+        "GEMINI_API_KEY": "your-gemini-api-key-here"
+      }
     }
   }
 }
@@ -115,7 +125,10 @@ Add to your `.claude/settings.local.json` (already exists at the repo root):
       "command": "node",
       "args": [
         "C:\\Users\\ronto\\source\\repos\\teaching\\easycslearning_mcp\\dist\\index.js"
-      ]
+      ],
+      "env": {
+        "GEMINI_API_KEY": "your-gemini-api-key-here"
+      }
     }
   }
 }
@@ -143,7 +156,18 @@ Give me a full summary for student "David Cohen" in "C# for Beginners".
 Create a new exercise lesson called "Linked Lists Practice" in the "Data Structures" topic of "C# for Beginners", then add a coding section to it.
 
 Show me all sections of lesson "Variables" in "C# for Beginners".
+
+[attach scanned exam image]
+This is Ron Cohen's handwritten exam for the "Recursion" section of lesson "Functions" in "C# for Beginners". Transcribe his answer and grade it.
 ```
+
+### Handwritten exam grading workflow
+
+1. Attach the scanned exam image to the Claude chat
+2. Ask Claude to transcribe a specific student's answer
+3. Claude calls `grade_student_answer` with the transcribed text
+4. The grade and Hebrew feedback are returned immediately
+5. The result is saved to Firestore automatically (set `saveGrade: false` to preview first)
 
 ---
 

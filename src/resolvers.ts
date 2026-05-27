@@ -60,6 +60,41 @@ export async function resolveLesson(db: Firestore, courseId: string, lessonName:
     return { lessonId: match.id, lessonName: data.lessonName, topicId: data.topicId };
 }
 
+// ─── Sections ────────────────────────────────────────────────────────────────
+
+export interface SectionRef {
+    sectionId: string;
+    sectionTitle: string;
+    content: string;
+    points: number;
+    language?: string;
+    type: string;
+}
+
+export async function resolveSection(db: Firestore, lessonId: string, sectionTitle: string): Promise<SectionRef> {
+    const snap = await db.collection('sections').where('lessonId', '==', lessonId).get();
+    const match = snap.docs.find(d => matches(d.data().title ?? '', sectionTitle));
+    if (!match) throw new Error(`Section not found: "${sectionTitle}" in the given lesson. Use get_lesson_content to list available sections.`);
+    const data = match.data();
+    return {
+        sectionId: match.id,
+        sectionTitle: data.title,
+        content: data.content ?? '',
+        points: (data.points as number) ?? 10,
+        language: data.language as string | undefined,
+        type: data.type as string,
+    };
+}
+
+// ─── Students (course-scoped) ─────────────────────────────────────────────────
+
+export async function resolveStudent(db: Firestore, courseId: string, studentName: string): Promise<StudentRef> {
+    const students = await getAllStudentsInCourse(db, courseId);
+    const match = students.find(s => matches(s.fullName, studentName));
+    if (!match) throw new Error(`Student not found: "${studentName}" in the given course. Use get_class_roster to list enrolled students.`);
+    return match;
+}
+
 // ─── Classes ─────────────────────────────────────────────────────────────────
 
 export interface ClassRef {
