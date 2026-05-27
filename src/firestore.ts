@@ -1,14 +1,21 @@
 import { Firestore } from '@google-cloud/firestore';
-import { OAuth2Client } from 'google-auth-library';
+import { GoogleAuth, OAuth2Client } from 'google-auth-library';
 
 export const PROJECT_ID = 'easycslearning-web-app';
 
 let _db: Firestore | null = null;
 
 export function initFirestore(authClient: OAuth2Client): Firestore {
+    // google-gax (used by @google-cloud/firestore v7) requires a GoogleAuth instance,
+    // not a raw OAuth2Client — GoogleAuth has getUniverseDomain() and getClient() which
+    // OAuth2Client is missing. Pre-seeding cachedCredential skips GoogleAuth's own
+    // credential-detection flow and reuses the token we already obtained.
+    const gauth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/datastore'] });
+    (gauth as unknown as { cachedCredential: OAuth2Client }).cachedCredential = authClient;
+
     _db = new Firestore({
         projectId: PROJECT_ID,
-        auth: authClient,
+        auth: gauth,
     });
     return _db;
 }

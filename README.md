@@ -6,7 +6,7 @@ Gives Claude read access to your EasyCS Learning Firebase data so you can ask qu
 
 ---
 
-## Available Tools (17 total)
+## Available Tools (20 total)
 
 | Group | Tool | What it does |
 |-------|------|-------------|
@@ -27,6 +27,9 @@ Gives Claude read access to your EasyCS Learning Firebase data so you can ask qu
 | Activity | `get_daily_activity` | Daily active students & answers chart |
 | Activity | `get_lesson_attendance` | Who submitted vs who didn't |
 | Integrity | `get_integrity_flags` | Plagiarism / suspicion flags |
+| Content | `create_lesson` | Create a new lesson inside a topic |
+| Content | `get_lesson_content` | Read all sections of a lesson in order |
+| Content | `add_lesson_section` | Append a new section to an existing lesson |
 
 ---
 
@@ -136,6 +139,10 @@ Show me students who haven't been active in the last 10 days in "C# for Beginner
 Get integrity flags with high severity for "C# for Beginners".
 
 Give me a full summary for student "David Cohen" in "C# for Beginners".
+
+Create a new exercise lesson called "Linked Lists Practice" in the "Data Structures" topic of "C# for Beginners", then add a coding section to it.
+
+Show me all sections of lesson "Variables" in "C# for Beginners".
 ```
 
 ---
@@ -143,5 +150,5 @@ Give me a full summary for student "David Cohen" in "C# for Beginners".
 ## Security Notes
 
 - The `client_secret.json` and `credentials.json` files live in `~/.easycs-mcp/` on your local machine only — they are never committed to git.
-- The OAuth2 token is scoped to **read-only Firestore access** — it cannot write or delete any data.
+- The OAuth2 token has **Firestore read/write access**. Read tools are safe by design; write tools (`create_lesson`, `add_lesson_section`) create new documents but never modify or delete existing ones.
 - This server is designed for **local use only** (stdio transport). It is not a public HTTP server.
