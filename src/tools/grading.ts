@@ -131,6 +131,36 @@ export function registerGradingTools(server: McpServer): void {
                     });
                     savedDocId = ref.id;
                 }
+
+                // ── Write grading feedback to aiChats so student sees it ──────
+                const percentage = Math.round((result.grade / section.points) * 100);
+                const feedbackMessage = {
+                    role: 'assistant',
+                    content: `**ציון: ${result.grade}/${section.points} (${percentage}%)**\n\n${result.feedback}`,
+                    timestamp: now,
+                };
+
+                const chatSnap = await db.collection('aiChats')
+                    .where('userId', '==', student.userId)
+                    .where('lessonId', '==', lessonId)
+                    .limit(1)
+                    .get();
+
+                if (chatSnap.empty) {
+                    await db.collection('aiChats').add({
+                        userId: student.userId,
+                        lessonId,
+                        messages: [feedbackMessage],
+                        createdAt: now,
+                        updatedAt: now,
+                    });
+                } else {
+                    const existing = chatSnap.docs[0].data();
+                    await chatSnap.docs[0].ref.update({
+                        messages: [...(existing.messages as unknown[] || []), feedbackMessage],
+                        updatedAt: now,
+                    });
+                }
             }
 
             return {

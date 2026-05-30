@@ -2,10 +2,11 @@
  * Group 3 — Grades tools
  *
  * Tools:
- *   get_lesson_grades      — per-student grades for a lesson
- *   get_failing_students   — students below a score threshold
- *   get_student_grades     — all lesson grades for one student
- *   get_grade_matrix       — full student × lesson grid
+ *   get_lesson_grades        — per-student grades for a lesson
+ *   get_failing_students     — students below a score threshold
+ *   get_student_grades       — all lesson grades for one student
+ *   get_grade_matrix         — full student × lesson grid
+ *   get_difficulty_analysis  — rank groups by avg grade, with AI feedback samples
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -14,6 +15,7 @@ import { getDb } from '../firestore.js';
 import {
     resolveCourse,
     resolveLesson,
+    resolveTopic,
     resolveClass,
     getStudentsInClass,
     getAllStudentsInCourse,
@@ -212,6 +214,199 @@ export function registerGradesTools(server: McpServer): void {
                         lessonsCompleted: `${completedCount}/${lessonGrades.length}`,
                         averageScore: avg != null ? `${avg}%` : '—',
                         lessonGrades,
+                    }, null, 2),
+                }],
+            };
+        }
+    );
+
+    // ── get_difficulty_analysis ──────────────────────────────────────────────
+    server.tool(
+        'get_difficulty_analysis',
+        "Rank groups by average grade (lowest first) and surface sample AI feedback texts to identify where students struggle most. groupBy: 'class' | 'lesson' | 'topic' | 'student'. Optional filters narrow the scope.",
+        {
+            courseName: z.string().describe('Course name or partial name'),
+            groupBy: z.enum(['class', 'lesson', 'topic', 'student']).describe("Grouping dimension"),
+            topicName: z.string().optional().describe('Limit to a specific topic (partial match)'),
+            lessonName: z.string().optional().describe('Limit to a specific lesson (partial match)'),
+            className: z.string().optional().describe('Limit to a specific class (partial match)'),
+            studentName: z.string().optional().describe('Limit to a specific student (partial match)'),
+        },
+        async ({ courseName, groupBy, topicName, lessonName, className, studentName }) => {
+            const db = getDb();
+            const { courseId, courseName: resolvedCourse } = await resolveCourse(db, courseName);
+
+            // ── 1. Load all lessons for this course ──────────────────────────
+            const lessonsSnap = await db.collection('lessons').where('courseId', '==', courseId).get();
+            const lessonMeta = new Map<string, { lessonName: string; topicId: string }>();
+            lessonsSnap.docs.forEach(d => lessonMeta.set(d.id, { lessonName: d.data().lessonName, topicId: d.data().topicId }));
+
+            // ── 2. Resolve lesson/topic scope filter ─────────────────────────
+            let scopeLessonIds: Set<string> | null = null;
+            if (lessonName) {
+                const { lessonId } = await resolveLesson(db, courseId, lessonName);
+                scopeLessonIds = new Set([lessonId]);
+            } else if (topicName) {
+                const { topicId } = await resolveTopic(db, courseId, topicName);
+                scopeLessonIds = new Set(lessonsSnap.docs.filter(d => d.data().topicId === topicId).map(d => d.id));
+            }
+            const activeLessonIds = scopeLessonIds ?? new Set(lessonMeta.keys());
+
+            // ── 3. Build sectionId → points map (batch by lessonId) ──────────
+            const sectionPointsMap = new Map<string, number>();
+            const lessonIdBatches = [...activeLessonIds];
+            for (let i = 0; i < lessonIdBatches.length; i += 30) {
+                const batch = lessonIdBatches.slice(i, i + 30);
+                const secSnap = await db.collection('sections').where('lessonId', 'in', batch).get();
+                secSnap.docs.forEach(d => {
+                    const pts = d.data().points ?? 0;
+                    if (pts > 0) sectionPointsMap.set(d.id, pts);
+                });
+            }
+
+            // ── 4. Resolve student filter ────────────────────────────────────
+            let filteredUserIds: Set<string> | null = null;
+            if (studentName) {
+                const usersSnap = await db.collection('users').get();
+                const userDoc = usersSnap.docs.find(d =>
+                    (d.data().fullName ?? '').toLowerCase().includes(studentName.toLowerCase().trim())
+                );
+                if (!userDoc) throw new Error(`Student not found: "${studentName}".`);
+                filteredUserIds = new Set([userDoc.id]);
+            } else if (className && groupBy !== 'class') {
+                const cls = await resolveClass(db, courseId, className);
+                const clsStudents = await getStudentsInClass(db, courseId, cls.classId);
+                filteredUserIds = new Set(clsStudents.map(s => s.userId));
+            }
+
+            // ── 5. Fetch all graded answers for the course ───────────────────
+            const answersSnap = await db.collection('studentAnswers').where('courseId', '==', courseId).get();
+
+            interface AnswerRow {
+                userId: string;
+                lessonId: string;
+                sectionId: string;
+                grade: number;
+                aiFeedback?: string;
+            }
+
+            const answers: AnswerRow[] = answersSnap.docs
+                .map(d => ({
+                    userId: d.data().userId as string,
+                    lessonId: d.data().lessonId as string,
+                    sectionId: d.data().sectionId as string,
+                    grade: d.data().grade as number,
+                    aiFeedback: d.data().aiFeedback as string | undefined,
+                }))
+                .filter(a =>
+                    a.grade != null &&
+                    activeLessonIds.has(a.lessonId) &&
+                    sectionPointsMap.has(a.sectionId) &&
+                    (filteredUserIds == null || filteredUserIds.has(a.userId))
+                );
+
+            // ── 6. Group by chosen dimension ─────────────────────────────────
+            type GroupEntry = { name: string; grades: number[]; feedbacks: string[] };
+            const groups = new Map<string, GroupEntry>();
+            const getOrCreate = (key: string, name: string): GroupEntry => {
+                if (!groups.has(key)) groups.set(key, { name, grades: [], feedbacks: [] });
+                return groups.get(key)!;
+            };
+            const addToGroup = (key: string, name: string, grade: number, pts: number, fb?: string) => {
+                const entry = getOrCreate(key, name);
+                entry.grades.push(Math.round((grade / pts) * 100));
+                if (fb) entry.feedbacks.push(fb);
+            };
+
+            if (groupBy === 'lesson') {
+                for (const a of answers) {
+                    const meta = lessonMeta.get(a.lessonId);
+                    if (!meta) continue;
+                    addToGroup(a.lessonId, meta.lessonName, a.grade, sectionPointsMap.get(a.sectionId)!, a.aiFeedback);
+                }
+
+            } else if (groupBy === 'topic') {
+                const topicsSnap = await db.collection('topics').where('courseId', '==', courseId).get();
+                const topicNameMap = new Map<string, string>();
+                topicsSnap.docs.forEach(d => topicNameMap.set(d.id, d.data().topicName as string));
+
+                for (const a of answers) {
+                    const meta = lessonMeta.get(a.lessonId);
+                    if (!meta) continue;
+                    const tName = topicNameMap.get(meta.topicId) ?? meta.topicId;
+                    addToGroup(meta.topicId, tName, a.grade, sectionPointsMap.get(a.sectionId)!, a.aiFeedback);
+                }
+
+            } else if (groupBy === 'class') {
+                const classesSnap = await db.collection('courseClasses').where('courseId', '==', courseId).get();
+                const classNameMap = new Map<string, string>();
+                classesSnap.docs.forEach(d => classNameMap.set(d.id, d.data().name as string));
+
+                const progressSnap = await db.collection('userProgress').where('courseId', '==', courseId).get();
+                const userClassMap = new Map<string, string>();
+                progressSnap.docs.forEach(d => {
+                    const data = d.data();
+                    if (data.classId) userClassMap.set(data.userId as string, data.classId as string);
+                });
+
+                let classFilter: string | null = null;
+                if (className) {
+                    const cls = await resolveClass(db, courseId, className);
+                    classFilter = cls.classId;
+                }
+
+                for (const a of answers) {
+                    const classId = userClassMap.get(a.userId);
+                    if (!classId) continue;
+                    if (classFilter && classId !== classFilter) continue;
+                    const cName = classNameMap.get(classId) ?? classId;
+                    addToGroup(classId, cName, a.grade, sectionPointsMap.get(a.sectionId)!, a.aiFeedback);
+                }
+
+            } else { // groupBy === 'student'
+                const usersSnap = await db.collection('users').get();
+                const userNameMap = new Map<string, string>();
+                usersSnap.docs.forEach(d => userNameMap.set(d.id, (d.data().fullName ?? 'Unknown') as string));
+
+                for (const a of answers) {
+                    const uName = userNameMap.get(a.userId) ?? a.userId;
+                    addToGroup(a.userId, uName, a.grade, sectionPointsMap.get(a.sectionId)!, a.aiFeedback);
+                }
+            }
+
+            // ── 7. Rank groups by average grade ascending ────────────────────
+            const rows = [...groups.values()]
+                .map(g => {
+                    const avg = g.grades.length > 0
+                        ? Math.round(g.grades.reduce((s, n) => s + n, 0) / g.grades.length)
+                        : null;
+                    return {
+                        name: g.name,
+                        averageGrade: avg != null ? `${avg}%` : '—',
+                        answerCount: g.grades.length,
+                        sampleFeedback: g.feedbacks.slice(0, 3),
+                    };
+                })
+                .sort((a, b) => {
+                    const av = a.averageGrade === '—' ? -1 : parseInt(a.averageGrade);
+                    const bv = b.averageGrade === '—' ? -1 : parseInt(b.averageGrade);
+                    return av - bv;
+                });
+
+            return {
+                content: [{
+                    type: 'text',
+                    text: JSON.stringify({
+                        course: resolvedCourse,
+                        groupBy,
+                        filters: {
+                            ...(topicName ? { topic: topicName } : {}),
+                            ...(lessonName ? { lesson: lessonName } : {}),
+                            ...(className ? { class: className } : {}),
+                            ...(studentName ? { student: studentName } : {}),
+                        },
+                        groupCount: rows.length,
+                        groups: rows,
                     }, null, 2),
                 }],
             };
