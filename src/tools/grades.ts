@@ -31,13 +31,15 @@ export function registerGradesTools(server: McpServer): void {
     // ── get_lesson_grades ────────────────────────────────────────────────────
     server.tool(
         'get_lesson_grades',
-        'Get grades for every student in a lesson. Optionally filter by class. Results sorted highest to lowest.',
+        'Get grades for every student in a lesson. Optionally filter by class and/or date range. Results sorted highest to lowest.',
         {
             courseName: z.string().describe('Course name or partial name'),
             lessonName: z.string().describe('Lesson name or partial name'),
             className: z.string().optional().describe('Class name to filter — optional; omit for all students'),
+            fromDate: z.string().optional().describe('Include only answers submitted on or after this date (ISO format, e.g. 2025-01-01)'),
+            toDate: z.string().optional().describe('Include only answers submitted on or before this date (ISO format, e.g. 2025-06-30)'),
         },
-        async ({ courseName, lessonName, className }) => {
+        async ({ courseName, lessonName, className, fromDate, toDate }) => {
             const db = getDb();
             const { courseId, courseName: resolvedCourse } = await resolveCourse(db, courseName);
             const { lessonId, lessonName: resolvedLesson } = await resolveLesson(db, courseId, lessonName);
@@ -62,11 +64,14 @@ export function registerGradesTools(server: McpServer): void {
                 .where('lessonId', '==', lessonId)
                 .get();
 
-            // Aggregate grade per student (sum of section grades)
+            // Aggregate grade per student (sum of section grades), with optional date filter
             const gradeByUser = new Map<string, number>();
             answersSnap.docs.forEach(d => {
                 const data = d.data();
                 if (data.grade == null) return;
+                const ts: string = data.updatedAt ?? data.createdAt ?? '';
+                if (fromDate && ts < fromDate) return;
+                if (toDate   && ts > toDate + 'T23:59:59') return;
                 const current = gradeByUser.get(data.userId) ?? 0;
                 gradeByUser.set(data.userId, current + (data.grade as number));
             });
@@ -92,6 +97,7 @@ export function registerGradesTools(server: McpServer): void {
                         course: resolvedCourse,
                         lesson: resolvedLesson,
                         class: resolvedClass,
+                        ...(fromDate || toDate ? { dateRange: { from: fromDate ?? 'any', to: toDate ?? 'any' } } : {}),
                         maxPoints,
                         submittedCount,
                         classAverage: avg != null ? `${avg}%` : '—',
@@ -111,8 +117,10 @@ export function registerGradesTools(server: McpServer): void {
             lessonName: z.string().describe('Lesson name or partial name'),
             className: z.string().optional().describe('Class name to filter — optional'),
             threshold: z.number().min(0).max(100).optional().describe('Percentage threshold, default 60'),
+            fromDate: z.string().optional().describe('Include only answers submitted on or after this date (ISO format, e.g. 2025-01-01)'),
+            toDate: z.string().optional().describe('Include only answers submitted on or before this date (ISO format, e.g. 2025-06-30)'),
         },
-        async ({ courseName, lessonName, className, threshold = 60 }) => {
+        async ({ courseName, lessonName, className, threshold = 60, fromDate, toDate }) => {
             const db = getDb();
             const { courseId, courseName: resolvedCourse } = await resolveCourse(db, courseName);
             const { lessonId, lessonName: resolvedLesson } = await resolveLesson(db, courseId, lessonName);
@@ -135,6 +143,9 @@ export function registerGradesTools(server: McpServer): void {
             answersSnap.docs.forEach(d => {
                 const data = d.data();
                 if (data.grade == null) return;
+                const ts: string = data.updatedAt ?? data.createdAt ?? '';
+                if (fromDate && ts < fromDate) return;
+                if (toDate   && ts > toDate + 'T23:59:59') return;
                 gradeByUser.set(data.userId, (gradeByUser.get(data.userId) ?? 0) + (data.grade as number));
             });
 
@@ -156,6 +167,7 @@ export function registerGradesTools(server: McpServer): void {
                         course: resolvedCourse,
                         lesson: resolvedLesson,
                         class: resolvedClass,
+                        ...(fromDate || toDate ? { dateRange: { from: fromDate ?? 'any', to: toDate ?? 'any' } } : {}),
                         threshold: `${threshold}%`,
                         failingCount: failing.length,
                         students: failing,
@@ -231,8 +243,10 @@ export function registerGradesTools(server: McpServer): void {
             lessonName: z.string().optional().describe('Limit to a specific lesson (partial match)'),
             className: z.string().optional().describe('Limit to a specific class (partial match)'),
             studentName: z.string().optional().describe('Limit to a specific student (partial match)'),
+            fromDate: z.string().optional().describe('Include only answers submitted on or after this date (ISO format, e.g. 2025-01-01)'),
+            toDate: z.string().optional().describe('Include only answers submitted on or before this date (ISO format, e.g. 2025-06-30)'),
         },
-        async ({ courseName, groupBy, topicName, lessonName, className, studentName }) => {
+        async ({ courseName, groupBy, topicName, lessonName, className, studentName, fromDate, toDate }) => {
             const db = getDb();
             const { courseId, courseName: resolvedCourse } = await resolveCourse(db, courseName);
 
@@ -297,13 +311,17 @@ export function registerGradesTools(server: McpServer): void {
                     sectionId: d.data().sectionId as string,
                     grade: d.data().grade as number,
                     aiFeedback: d.data().aiFeedback as string | undefined,
+                    updatedAt: (d.data().updatedAt ?? d.data().createdAt ?? '') as string,
                 }))
-                .filter(a =>
-                    a.grade != null &&
-                    activeLessonIds.has(a.lessonId) &&
-                    sectionPointsMap.has(a.sectionId) &&
-                    (filteredUserIds == null || filteredUserIds.has(a.userId))
-                );
+                .filter(a => {
+                    if (a.grade == null) return false;
+                    if (!activeLessonIds.has(a.lessonId)) return false;
+                    if (!sectionPointsMap.has(a.sectionId)) return false;
+                    if (filteredUserIds != null && !filteredUserIds.has(a.userId)) return false;
+                    if (fromDate && a.updatedAt < fromDate) return false;
+                    if (toDate   && a.updatedAt > toDate + 'T23:59:59') return false;
+                    return true;
+                });
 
             // ── 6. Group by chosen dimension ─────────────────────────────────
             type GroupEntry = { name: string; grades: number[]; feedbacks: string[] };
@@ -404,6 +422,7 @@ export function registerGradesTools(server: McpServer): void {
                             ...(lessonName ? { lesson: lessonName } : {}),
                             ...(className ? { class: className } : {}),
                             ...(studentName ? { student: studentName } : {}),
+                            ...(fromDate || toDate ? { dateRange: { from: fromDate ?? 'any', to: toDate ?? 'any' } } : {}),
                         },
                         groupCount: rows.length,
                         groups: rows,
